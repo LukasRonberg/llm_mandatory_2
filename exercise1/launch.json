@@ -1,0 +1,14 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "java",
+      "name": "BuildModel",
+      "request": "launch",
+      "mainClass": "BuildModel",
+      "args": ["ft-da.txt"],
+      "cwd": "${workspaceFolder}",
+      "vmArgs": "-Xmx4G -Dstdout.encoding=UTF-8"
+    }
+  ]
+}
