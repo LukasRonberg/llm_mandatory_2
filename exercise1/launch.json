@@ -6,7 +6,7 @@
       "name": "BuildModel",
       "request": "launch",
       "mainClass": "BuildModel",
-      "args": ["ft-da.txt"],
+      "args": ["fiction-en.txt", "5"],
       "cwd": "${workspaceFolder}",
       "vmArgs": "-Xmx4G -Dstdout.encoding=UTF-8"
     }

@@ -1,15 +1,18 @@
 // sestoft@itu.dk * 2026-08-30
 // Modified to compile on any JDK 11+ regardless of source-file encoding,
 // and to take the context length k as an argument and log timings.
+// Freq replaced by the compact version from BuildModel.01.java (fixes OutOfMemoryError),
+// and typographic quotes/dashes folded to ASCII as in BuildModel.02.java.
 //
 // Compile and run with
 //   javac BuildModel.java
-//   java BuildModel ft-da.txt                 (k = 5, reads the text file as UTF-8)
-//   java BuildModel ft-da.txt 7               (k = 7)
-//   java BuildModel ft-da.txt 7 ISO-8859-1    (k = 7, text file is Latin-1)
+//   java BuildModel fiction-en.txt              (k = 5, reads the text file as UTF-8)
+//   java BuildModel slice_1M.txt 7              (k = 7)
+//   java BuildModel ft-da.txt 7 ISO-8859-1      (k = 7, text file is Latin-1)
 //
-// Each run appends one line to timings.csv:
-//   k,chars,mapEntries,readMs,buildMs,generateMs,totalMs,heapUsedMB,status
+// The generated text is written (UTF-8) to <textfile>/out_k<k>.txt in the current directory.
+// Each run appends one line to timings.csv in the current directory:
+//   file,k,chars,mapEntries,readMs,buildMs,generateMs,totalMs,heapUsedMB,status
 
 import java.io.*;
 import java.nio.charset.Charset;
@@ -35,7 +38,15 @@ class BuildModel {
            new InputStreamReader(new FileInputStream(args[0]), cs))) {
       allText = rdr.lines().collect(Collectors.joining(" "));
     }
+    // Fold typographic punctuation to ASCII and any remaining non-Latin-1 char to a space,
+    // so both prefixes and next-chars fit the 0..255 range that Freq works with
+    allText = allText.replace('‘', '\'').replace('’', '\'')
+                     .replace('“', '"').replace('”', '"')
+                     .replace('—', '-').replace('–', '-')
+                     .replace("…", "...")
+                     .replaceAll("[^\\x00-\\xFF]", " ");
     long t1 = System.nanoTime();
+    String fileName = new File(args[0]).getName();
 
     Map<String,Freq> freqMap = new TreeMap<String,Freq>();  // HashMap<String,Freq>() or TreeMap<String,Freq>()
     try {
@@ -47,7 +58,7 @@ class BuildModel {
     } catch (OutOfMemoryError e) {
       long entries = freqMap.size();
       freqMap = null;  // release the map so we can still write the log line
-      logTiming(maxContext, allText.length(), entries, ms(t0, t1), ms(t1, System.nanoTime()), -1, ms(t0, System.nanoTime()), -1, "OOM");
+      logTiming(fileName, maxContext, allText.length(), entries, ms(t0, t1), ms(t1, System.nanoTime()), -1, ms(t0, System.nanoTime()), -1, "OOM");
       System.err.printf("k=%d: OutOfMemoryError while building the model%n", maxContext);
       System.exit(2);
     }
@@ -56,24 +67,34 @@ class BuildModel {
     String text = generate(freqMap, maxContext, 100000);
     long t3 = System.nanoTime();
 
-    System.out.printf("Context length %d:\n%s\n\n", maxContext, text); // Generate random text
+    // Write the generated text ourselves, in UTF-8, so the shell's redirection
+    // (PowerShell 5.1 '>' writes UTF-16) cannot garble it
+    // One sub-folder per input file, e.g. slice_1M/out_k7.txt
+    File outDir = new File(fileName.replaceFirst("\\.[^.]*$", ""));
+    outDir.mkdirs();
+    File outFile = new File(outDir, String.format("out_k%d.txt", maxContext));
+    try (PrintWriter pw = new PrintWriter(new OutputStreamWriter(new FileOutputStream(outFile), StandardCharsets.UTF_8))) {
+      pw.printf("Context length %d:\n%s\n\n", maxContext, text);
+    }
 
+    // Measure heap after a GC, so only live data (the model) is counted, not garbage
+    System.gc();
     Runtime rt = Runtime.getRuntime();
     long heapMB = (rt.totalMemory() - rt.freeMemory()) / (1024 * 1024);
-    logTiming(maxContext, allText.length(), freqMap.size(), ms(t0, t1), ms(t1, t2), ms(t2, t3), ms(t0, t3), heapMB, "ok");
+    logTiming(fileName, maxContext, allText.length(), freqMap.size(), ms(t0, t1), ms(t1, t2), ms(t2, t3), ms(t0, t3), heapMB, "ok");
     System.err.printf("k=%2d  entries=%,d  read=%d ms  build=%d ms  generate=%d ms  total=%d ms  heap=%d MB%n",
                       maxContext, freqMap.size(), ms(t0, t1), ms(t1, t2), ms(t2, t3), ms(t0, t3), heapMB);
   }
 
   private static long ms(long from, long to) { return (to - from) / 1_000_000; }
 
-  private static void logTiming(int k, long chars, long entries, long readMs, long buildMs,
+  private static void logTiming(String file, int k, long chars, long entries, long readMs, long buildMs,
                                 long genMs, long totalMs, long heapMB, String status) throws IOException {
     File f = new File("timings.csv");
     boolean newFile = !f.exists();
     try (PrintWriter pw = new PrintWriter(new FileWriter(f, true))) {
-      if (newFile) pw.println("k,chars,mapEntries,readMs,buildMs,generateMs,totalMs,heapUsedMB,status");
-      pw.printf("%d,%d,%d,%d,%d,%d,%d,%d,%s%n", k, chars, entries, readMs, buildMs, genMs, totalMs, heapMB, status);
+      if (newFile) pw.println("file,k,chars,mapEntries,readMs,buildMs,generateMs,totalMs,heapUsedMB,status");
+      pw.printf("%s,%d,%d,%d,%d,%d,%d,%d,%d,%s%n", file, k, chars, entries, readMs, buildMs, genMs, totalMs, heapMB, status);
     }
   }
 
@@ -122,25 +143,37 @@ class BuildModel {
   static final Set<Integer> letterSet = Arrays.stream(letters).boxed().collect(Collectors.toSet());
 }
 
+// Compact Freq from BuildModel.01.java: stores only the characters actually seen
+// (most prefixes have few successors), instead of a fixed int[256] (~1 KB) per prefix
 class Freq {
-  private final int[] counts = new int[256];
-  private double sum = -1.0;
+  private char[] chars = new char[2];
+  private int[] counts = new int[2];
+  private int size = 0, sum = 0;
 
-  public void incr(char c) { counts[c & 0xFF]++; }
+  public void incr(char c) {
+    c = (char)(c & 0xFF);
+    sum++;
+    for (int i = 0; i < size; i++)
+      if (chars[i] == c) { counts[i]++; return; }
+    if (size == chars.length) {
+      chars = Arrays.copyOf(chars, size * 2);
+      counts = Arrays.copyOf(counts, size * 2);
+    }
+    chars[size] = c;
+    counts[size++] = 1;
+  }
 
   public double freq(int ch) {
-    if (sum < 0.0)
-      sum = Arrays.stream(counts).sum();
-    return counts[ch & 0xFF] / sum;
+    ch &= 0xFF;
+    for (int i = 0; i < size; i++)
+      if (chars[i] == ch) return (double) counts[i] / sum;
+    return 0.0;
   }
 
   public char sample() {
-    if (sum < 0.0)
-      sum = Arrays.stream(counts).sum();
-    int res = 0;
-    double rank = Math.random() * sum;
-    while (counts[res] < rank)
-      rank -= counts[res++];
-    return (char)res;
+    int r = (int) (Math.random() * sum);
+    for (int i = 0; i < size; i++)
+      if ((r -= counts[i]) < 0) return chars[i];
+    return chars[size - 1];
   }
 }
