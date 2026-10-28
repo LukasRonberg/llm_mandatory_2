@@ -11,6 +11,14 @@
 \usepackage{microtype}
 \usepackage[hidelinks]{hyperref}
 \usepackage{parskip}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{needspace}
+
+\lstset{language=Java, basicstyle=\ttfamily\small, commentstyle=\color{gray}\itshape,
+  keywordstyle=\bfseries, breaklines=true, frame=single, xleftmargin=1em,
+  columns=fullflexible, keepspaces=true,
+  showstringspaces=false}
 
 \graphicspath{{../exercise1_2/plots/}}
 
@@ -85,6 +93,60 @@ citationstegn tilbage. Endelig tilføjede vi tidtagning af indlæsning, opbygnin
 generering samt måling af hukommelsesforbruget efter en \emph{garbage collection}
 (Javas oprydning af hukommelse), så vi så vidt muligt kun måler selve modellen.
 
+\subsection{Uddrag af den ændrede kode}
+
+Den vigtigste ændring er klassen \texttt{Freq}. I den oprindelige kode var den et
+fast \texttt{int[256]}; nu gemmer den kun de tegn, der faktisk er set, i to små
+arrays, der fordobles efter behov:
+
+\begin{lstlisting}
+class Freq {
+  private char[] chars = new char[2];
+  private int[] counts = new int[2];
+  private int size = 0, sum = 0;
+
+  public void incr(char c) {
+    c = (char)(c & 0xFF);
+    sum++;
+    for (int i = 0; i < size; i++)
+      if (chars[i] == c) { counts[i]++; return; }
+    if (size == chars.length) {            // grow by doubling
+      chars = Arrays.copyOf(chars, size * 2);
+      counts = Arrays.copyOf(counts, size * 2);
+    }
+    chars[size] = c;
+    counts[size++] = 1;
+  }
+
+  public char sample() {
+    int r = (int) (Math.random() * sum);
+    for (int i = 0; i < size; i++)
+      if ((r -= counts[i]) < 0) return chars[i];
+    return chars[size - 1];
+  }
+}
+\end{lstlisting}
+
+\texttt{incr} laver nu en lineær søgning i stedet for et array-opslag, men da de
+fleste kontekster kun har 1--3 efterfølgere, er listen i praksis meget kort.
+\texttt{sample} trækker et tilfældigt tal i $[0, \mathit{sum})$ og går tællingerne
+igennem, til det er brugt op, hvilket giver samme fordeling som før.
+
+Oprydningen af typografiske tegn er en kæde af \texttt{replace}-kald på teksten,
+lige efter den er læst ind, så både kontekster og næste-tegn ligger i intervallet
+0--255. Endelig gøres $k$ til et argument, og hukommelsen måles efter en garbage
+collection, så vi kun tæller den levende model og ikke affald, der endnu ikke er
+ryddet op:
+
+\needspace{8\baselineskip}
+\begin{lstlisting}
+if (args.length >= 2) maxContext = Integer.parseInt(args[1]);
+...
+System.gc();
+Runtime rt = Runtime.getRuntime();
+long heapMB = (rt.totalMemory() - rt.freeMemory()) / (1024 * 1024);
+\end{lstlisting}
+
 \section{Eksperimenter}
 
 Selv med den sparsomme repræsentation vokser hukommelsesforbruget med tekstens
@@ -153,22 +215,23 @@ $k=10$. Den overordnede tendens er dog både tydelig og stabil.
 
 Tallene fortæller kun halvdelen af historien; det mest lærerige var at læse den
 tekst, modellen selv producerer. Her er korte uddrag fra modeller bygget på
-1M-udsnittet:
+1M-udsnittet. Den fulde genererede tekst for alle $k$ ligger i repositoriet i mappen
+\texttt{exercise1/results/2026-10-28\_1M\_text/slice\_1M/} som \texttt{out\_k$\langle k\rangle$.txt}:
 
 \begin{description}
-  \item[$k=1$:] \textit{ve tu wis he r s t thist Asikithe ku cknshavek warst f end owointea}
-  \item[$k=3$:] \textit{Corpheus wouldn't him the side fore and lovelowing in tely cond, who he reall head loor}
-  \item[$k=5$:] \textit{Bo-Katan is though the put on something of one in front. 'Well asks. Charon's been a hand.}
-  \item[$k=8$:] \textit{He turned and glanced up at that those look like the road as a wonderful and lively complexion}
-  \item[$k=12$:] \textit{After that time the buns were all eaten, the prizes were all loaded up, and it seemed everyone else is gonna be a good day.}
+  \item[$k=1$:] \textit{sorle hachay Kopere tlu rif to pa an y ht t, lestto abe Werenantou itie jumedeshathauly d ate thisthe ly abeng A f Hea Thella ng hifllle. howlom stompplding bamesps s hepldo}
+  \item[$k=3$:] \textit{His expreturns of the he bare working. He sauce wand he acticall trius frien the mothe Wilbumped as sounders ally peact, the out cross feeliver. I dically justile. It's eyes him ands he somewhat with his to hold hildie she preally}
+  \item[$k=5$:] \textit{He water you've been it all the looking able to yourse of the from one but he desert. It's main creatures backwardly chair, watching at him, but he was that comforting. 'For my son. And I - we can coom and all have an idiots}
+  \item[$k=7$:] \textit{The Princess of him, at Morpheus had done anything, Mr. Glover,' she says as she attending his son and bubbled jaw like home in the side of the sweats as he's here. When Peter's shoulders-{}-'I'll be fine. Jason under a collapse, simultaneously.}
+  \item[$k=12$:] \textit{This time, Jason went to sleep again tonight as he had seen the man in person after being run to ground. His muscles spasmed helplessly, blatantly. Stede forces himself to feel bad. He'd tried being reasonable, tried catching flies with honey}
 \end{description}
 
 Udviklingen er tydelig. Med $k=1$ kender modellen kun bogstavfrekvenser og typiske
 bogstavpar, så resultatet ligner engelsk på afstand, men indeholder næsten ingen
 rigtige ord. Ved $k=3$ falder korte, almindelige ord på plads, mens de længere ord
-bliver til fantasiord som \textit{lovelowing}. Ved $k=5$ er næsten alle ord rigtige,
-men sætningerne giver ikke mening. Ved $k=8$ dukker korte grammatiske stumper op, og
-ved $k=12$ læses teksten næsten som rigtig prosa.
+bliver til fantasiord som \textit{expreturns} og \textit{Wilbumped}. Ved $k=5$ er
+næsten alle ord rigtige, men sætningerne giver ikke mening. Ved $k=7$ dukker korte
+grammatiske stumper op, og ved $k=12$ læses teksten næsten som rigtig prosa.
 
 Men den flotte tekst ved $k=12$ er i en vis forstand snyd. Fordi næsten hver
 12-tegnskontekst kun findes ét sted i teksten, er der ofte kun ét muligt næste tegn,
