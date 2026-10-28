@@ -1,3 +1,7 @@
 out_*
 slices/
 *.class
+
+# agents md
+AGENTS.md
+
